@@ -168,6 +168,7 @@ class ControllerApplication(zigpy.application.ControllerApplication):
             self.handle_message(device, False, aps_frame.profileId, aps_frame.clusterId, aps_frame.sourceEndpoint, aps_frame.destinationEndpoint, tsn, command_id, args)
 
     def _handle_reply(self, sender, aps_frame, tsn, command_id, args):
+        LOGGER.debug("[%s] _handle_reply", tsn)
         try:
             send_fut, reply_fut = self._pending[tsn]
             if send_fut.done():
@@ -182,9 +183,11 @@ class ControllerApplication(zigpy.application.ControllerApplication):
             # We've already handled, don't drop through to device handler
             return
 
+        LOGGER.debug("[%s] Going to handle_message (no pending pops!)", tsn)
         self.handle_message(sender, True, aps_frame.profileId, aps_frame.clusterId, aps_frame.sourceEndpoint, aps_frame.destinationEndpoint, tsn, command_id, args)
 
     def _handle_frame_failure(self, message_type, destination, aps_frame, message_tag, status, message):
+        LOGGER.debug("[%s] _handle_frame_failure", message_tag)
         try:
             send_fut, reply_fut = self._pending.pop(message_tag)
             send_fut.set_exception(DeliveryError("Message send failure: %s" % (status, )))
@@ -196,6 +199,7 @@ class ControllerApplication(zigpy.application.ControllerApplication):
             LOGGER.debug("Invalid state on future - probably duplicate response: %s", exc)
 
     def _handle_frame_sent(self, message_type, destination, aps_frame, message_tag, status, message):
+        LOGGER.debug("[%s] _handle_frame_sent", message_tag)
         try:
             send_fut, reply_fut = self._pending[message_tag]
             # Sometimes messageSendResult and a reply come out of order
@@ -210,12 +214,15 @@ class ControllerApplication(zigpy.application.ControllerApplication):
 
     @zigpy.util.retryable_request
     async def request(self, nwk, profile, cluster, src_ep, dst_ep, sequence, data, expect_reply=True, timeout=10):
+        LOGGER.debug("[%s] request(..., expect_reply=%s, timeout=%s)", sequence, expect_reply, timeout)
         assert sequence not in self._pending
         send_fut = asyncio.Future()
         reply_fut = None
         if expect_reply:
             reply_fut = asyncio.Future()
         self._pending[sequence] = (send_fut, reply_fut)
+
+        LOGGER.debug("[%s] Pending ZigBee requests: %s", sequence, self._pending)
 
         aps_frame = t.EmberApsFrame()
         aps_frame.profileId = t.uint16_t(profile)
@@ -229,7 +236,9 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         aps_frame.groupId = t.uint16_t(0)
         aps_frame.sequence = t.uint8_t(sequence)
 
+        
         v = await self._ezsp.sendUnicast(self.direct, nwk, aps_frame, sequence, data)
+        LOGGER.debug("[%s] request sendUnicast() -> %s", sequence, v)
         if v[0] != t.EmberStatus.SUCCESS:
             self._pending.pop(sequence)
             send_fut.cancel()
@@ -239,10 +248,12 @@ class ControllerApplication(zigpy.application.ControllerApplication):
 
         # Wait for messageSentHandler message
         v = await send_fut
+        LOGGER.debug("[%s] request send_fut -> %s", sequence, v)
         if expect_reply:
             # Wait for reply
             try:
                 v = await asyncio.wait_for(reply_fut, timeout)
+                LOGGER.debug("[%s] request reply_fut -> %s", sequence, v)
             except:  # noqa: E722
                 # If we timeout (or fail for any reason), clear the future
                 self._pending.pop(sequence)

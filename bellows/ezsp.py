@@ -56,7 +56,7 @@ class EZSP:
         return bytes(frame) + data
 
     def _command(self, name, *args):
-        LOGGER.debug("Send command %s", name)
+        LOGGER.debug("[%s] Send command %s", self._seq, name)
         data = self._ezsp_frame(name, *args)
         self._gw.data(data)
         c = self.COMMANDS[name]
@@ -159,13 +159,16 @@ class EZSP:
 
         frame_name = self.COMMANDS_BY_ID[frame_id][0]
         LOGGER.debug(
-            "Application frame %s (%s) received",
+            "[%s] Application frame %s (%s) received",
+            sequence,
             frame_id,
             frame_name,
         )
 
         if sequence in self._awaiting:
             expected_id, schema, future = self._awaiting.pop(sequence)
+            if expected_id != frame_id:
+                LOGGER.debug("[%s] !!!! Expected command %s, got %s", sequence, expected_id, frame_id)
             assert expected_id == frame_id
             result, data = t.deserialize(data, schema)
             future.set_result(result)
